@@ -1,5 +1,5 @@
 // PluginWindowController.m
-// 
+//
 // Copyright (c) 2014 Marin Usalj | supermar.in
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -8,10 +8,10 @@
 // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
-// 
+//
 // The above copyright notice and this permission notice shall be included in
 // all copies or substantial portions of the Software.
-// 
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -26,7 +26,7 @@
 #import "ATZDownloader.h"
 #import "Alcatraz.h"
 #import "ATZPackageFactory.h"
-#import "ATZVersion.h"
+#import "ATZStyleKit.h"
 
 #import "ATZPlugin.h"
 #import "ATZColorScheme.h"
@@ -37,10 +37,12 @@
 #import "ATZFillableButton.h"
 #import "ATZPackageTableViewDelegate.h"
 
-static NSString *const ALL_ITEMS_ID = @"AllItemsToolbarItem";
+#import "NSImage+Alcatraz.h"
+
 static NSString *const CLASS_PREDICATE_FORMAT = @"(self isKindOfClass: %@)";
 static NSString *const SEARCH_PREDICATE_FORMAT = @"(name contains[cd] %@ OR summary contains[cd] %@)";
 static NSString *const INSTALLED_PREDICATE_FORMAT = @"(installed == YES)";
+static NSString *const BLACKLISTED_PREDICATE_FORMAT = @"(blacklisted == YES)";
 
 typedef NS_ENUM(NSInteger, ATZFilterSegment) {
     ATZFilterSegmentPlugins = 0,
@@ -85,23 +87,43 @@ typedef NS_ENUM(NSInteger, ATZFilterSegment) {
     return YES;
 }
 
+- (NSError *)willPresentError:(NSError *)error
+{
+    const NSUInteger maxLength = 500;
+    NSString *recoverySuggestion = error.userInfo[NSLocalizedRecoverySuggestionErrorKey];
+    if (recoverySuggestion.length > maxLength) {
+        NSMutableDictionary *userInfo = [error.userInfo mutableCopy];
+        userInfo[NSLocalizedRecoverySuggestionErrorKey] = [[recoverySuggestion substringToIndex:MIN(maxLength, recoverySuggestion.length)] stringByAppendingString:@"…"];
+        return [NSError errorWithDomain:error.domain code:error.code userInfo:userInfo];
+    }
+    return error;
+}
+
 #pragma mark - Bindings
 
 - (IBAction)installPressed:(ATZFillableButton *)button {
     ATZPackage *package = [self.tableViewDelegate tableView:self.tableView objectValueForTableColumn:0 row:[self.tableView rowForView:button]];
-    
-    if (package.isInstalled)
-        [self removePackage:package andUpdateControl:button];
-    else
+
+    if (package.isInstalled) {
+        if (package.isBlacklisted) {
+            [self whitelistPackage:(ATZPlugin *)package andUpdateControl:button];
+        }
+        else {
+            [self removePackage:package andUpdateControl:button];
+        }
+    }
+    else {
         [self installPackage:package andUpdateControl:button];
+    }
+
 }
 
 - (NSDictionary *)segmentClassMapping {
     static NSDictionary *segmentClassMapping;
     if (!segmentClassMapping) {
-       segmentClassMapping = @{@(ATZFilterSegmentColorSchemes): [ATZColorScheme class],
-            @(ATZFilterSegmentPlugins): [ATZPlugin class],
-            @(ATZFilterSegmentTemplates): [ATZTemplate class]};
+        segmentClassMapping = @{@(ATZFilterSegmentColorSchemes): [ATZColorScheme class],
+                                @(ATZFilterSegmentPlugins): [ATZPlugin class],
+                                @(ATZFilterSegmentTemplates): [ATZTemplate class]};
     }
     return segmentClassMapping;
 }
@@ -112,7 +134,7 @@ typedef NS_ENUM(NSInteger, ATZFilterSegment) {
 
 - (IBAction)displayScreenshotPressed:(NSButton *)sender {
     ATZPackage *package = [self.tableViewDelegate tableView:self.tableView objectValueForTableColumn:0 row:[self.tableView rowForView:sender]];
-    [self displayScreenshotWithPath:package.screenshotPath withTitle:package.name];
+    [self displayScreenshotForPackage:package];
 }
 
 - (IBAction)openPackageWebsitePressed:(NSButton *)sender {
@@ -168,8 +190,7 @@ typedef NS_ENUM(NSInteger, ATZFilterSegment) {
 }
 
 - (void)reloadTableView {
-    self.tableViewDelegate = [[ATZPackageTableViewDelegate alloc] initWithPackages:self.packages
-                                                                    tableViewOwner:self];
+    self.tableViewDelegate = [[ATZPackageTableViewDelegate alloc] initWithPackages:self.packages tableViewOwner:self];
     self.tableView.delegate = self.tableViewDelegate;
     self.tableView.dataSource = self.tableViewDelegate;
     [self.tableViewDelegate configureTableView:self.tableView];
@@ -183,33 +204,44 @@ typedef NS_ENUM(NSInteger, ATZFilterSegment) {
     if (!package.isInstalled) return;
 
     NSOperation *updateOperation = [NSBlockOperation blockOperationWithBlock:^{
-        [package updateWithProgress:^(NSString *proggressMessage, CGFloat progress){}
-                                completion:^(NSError *failure){}];
+        [package updateWithProgress:^(NSString *progressMessage, CGFloat progress){}
+                         completion:^(NSError *failure){}];
     }];
     [updateOperation addDependency:[[NSOperationQueue mainQueue] operations].lastObject];
     [[NSOperationQueue mainQueue] addOperation:updateOperation];
 }
 
 - (void)removePackage:(ATZPackage *)package andUpdateControl:(ATZFillableButton *)button {
-    [button setFillRatio:0 animated:YES];
-    button.title = @"INSTALL";
-    [package removeWithCompletion:NULL];
+    [package removeWithCompletion:^(NSError *failure) {
+        [ATZStyleKit updateButton:button forPackageState:package animated:YES];
+    }];
 }
 
-- (void)installPackage:(ATZPackage *)package andUpdateControl:(ATZFillableButton *)control {
+- (void)installPackage:(ATZPackage *)package andUpdateControl:(ATZFillableButton *)button {
     [package installWithProgress:^(NSString *progressMessage, CGFloat progress) {
-        control.title = @"INSTALLING";
-        [control setFillRatio:progress * 100 animated:YES];
+        button.title = @"INSTALLING";
+        [button setFillRatio:progress animated:YES];
     } completion:^(NSError *failure) {
-        control.title = package.isInstalled ? @"REMOVE" : @"INSTALL";
-        [control setFillRatio:(package.isInstalled ? 100 : 0) animated:YES];
+        [ATZStyleKit updateButton:button forPackageState:package animated:YES];
+        if (failure) {
+            [self presentError:failure];
+        } else if (package.requiresRestart) {
+            [self postNotificationForInstalledPackage:package];
+        }
+    }];
+}
+
+- (void)whitelistPackage:(ATZPlugin *)package andUpdateControl:(ATZFillableButton *)button {
+    [package whitelistWithCompletion:^(NSError *failure) {
+        [ATZStyleKit updateButton:button forPackageState:package animated:YES];
+        [self updateInstallationStateSegmentedControl];
         if (package.requiresRestart) [self postNotificationForInstalledPackage:package];
     }];
 }
 
 - (void)postNotificationForInstalledPackage:(ATZPackage *)package {
     if (![NSUserNotificationCenter class] || !package.isInstalled) return;
-    
+
     NSUserNotification *notification = [NSUserNotification new];
     notification.title = [NSString stringWithFormat:@"%@ installed", package.type];
     NSString *restartText = package.requiresRestart ? @" Please restart Xcode to use it." : @"";
@@ -222,46 +254,40 @@ BOOL hasPressedCommandF(NSEvent *event) {
     return ([event modifierFlags] & NSCommandKeyMask) && [[event characters] characterAtIndex:0] == 'f';
 }
 
-- (void)updatePredicate {
-    NSString *searchText = self.searchField.stringValue;
-    NSMutableArray* predicates = [[NSMutableArray alloc] initWithCapacity:3];
-    Class selectedPackageClass = [self segmentClassMapping][@([self.packageTypeSegmentedControl selectedSegment])];
-    if (selectedPackageClass)
-        [predicates addObject:[NSPredicate predicateWithFormat:CLASS_PREDICATE_FORMAT, selectedPackageClass]];
-
-    if (searchText.length > 0)
-        [predicates addObject:[NSPredicate predicateWithFormat:SEARCH_PREDICATE_FORMAT, searchText, searchText]];
-
-    if ([self.installationStateSegmentedControl selectedSegment] != 0)
-        [predicates addObject:[NSPredicate predicateWithFormat:INSTALLED_PREDICATE_FORMAT]];
-
-    [self.tableViewDelegate filterUsingPredicate:[NSCompoundPredicate andPredicateWithSubpredicates:predicates]];
-    [self.tableView reloadData];
-}
-
 - (void)updatePackages {
     for (ATZPackage *package in self.packages) {
         [self enqueuePackageUpdate:package];
     }
+    [self updateInstallationStateSegmentedControl];
 }
 
 - (void)openWebsite:(NSString *)address {
     [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:address]];
 }
 
-- (void)displayScreenshotWithPath:(NSString *)screenshotPath withTitle:(NSString *)title {
-    
+- (void)displayScreenshotForPackage:(ATZPackage *)package {
+
     [self.previewPanel.animator setAlphaValue:0.f];
-    self.previewPanel.title = title;
-    [self retrieveImageViewForScreenshot:screenshotPath
-                                progress:^(CGFloat progress) {}
-                              completion:^(NSImage *image) {
-        [self displayImage:image withTitle:title];
+
+    [self.tableViewDelegate fetchAndCacheImageForPackage:package progress:NULL completion:^(NSImage *image) {
+        [self displayImage:image forPackage:package];
     }];
 }
 
-- (void)displayImage:(NSImage *)image withTitle:(NSString*)title {
+- (void)displayImage:(NSImage *)image forPackage:(ATZPackage *)package {
+    self.previewPanel.title = package.name;
+    if (image.frameCount > 1) {
+        self.previewImageView.imageScaling = NSImageScaleNone;
+        self.previewImageView.animates = YES;
+        self.previewImageView.canDrawSubviewsIntoLayer = YES;
+        self.previewPanel.title = [self.previewPanel.title stringByAppendingString:@" [GIF]"];
+    } else {
+        self.previewImageView.imageScaling = NSImageScaleProportionallyDown;
+        self.previewImageView.animates = NO;
+        self.previewImageView.canDrawSubviewsIntoLayer = NO;
+    }
     self.previewImageView.image = image;
+    
     [NSAnimationContext beginGrouping];
 
     [self.previewImageView.animator setFrame:(CGRect){ .origin = CGPointMake(0, 0), .size = image.size }];
@@ -275,23 +301,50 @@ BOOL hasPressedCommandF(NSEvent *event) {
     [self.previewPanel.animator setAlphaValue:1.f];
 }
 
-- (void)retrieveImageViewForScreenshot:(NSString *)screenshotPath progress:(void (^)(CGFloat))downloadProgress completion:(void (^)(NSImage *))completion {
-    
-    ATZDownloader *downloader = [ATZDownloader new];
-    [downloader downloadFileFromPath:screenshotPath
-                            progress:^(CGFloat progress) {
-                                downloadProgress(progress);
-                            }
-                          completion:^(NSData *responseData, NSError *error) {
-                              
-                              NSImage *image = [[NSImage alloc] initWithData:responseData];
-                              completion(image);
-                          }];
-    
+- (void)addVersionToWindow {
+    NSString *version = [[[Alcatraz sharedPlugin] bundle] infoDictionary][@"CFBundleShortVersionString"];
+    self.versionMenuItem.title = [NSString stringWithFormat:@"Version %@", version];
 }
 
-- (void)addVersionToWindow {
-    self.versionTextField.stringValue = @(ATZ_VERSION);
+#pragma mark - Packages filtering
+
+- (void)updateInstallationStateSegmentedControl {
+    NSPredicate *blacklistedPredicate = [NSPredicate predicateWithFormat:BLACKLISTED_PREDICATE_FORMAT];
+    NSUInteger blacklistedPackagesCount = [self.packages filteredArrayUsingPredicate:blacklistedPredicate].count;
+
+    if (blacklistedPackagesCount > 0) {
+        [self.installationStateSegmentedControl setSegmentCount:3];
+        NSString *label = [NSString stringWithFormat:@"Blocked (%lu)", blacklistedPackagesCount];
+        [self.installationStateSegmentedControl setLabel:label forSegment:2];
+    }
+    else {
+        [self.installationStateSegmentedControl setSegmentCount:2];
+        [self.installationStateSegmentedControl setSelectedSegment:0];
+        [self updatePredicate];
+    }
+}
+
+- (void)updatePredicate {
+    NSString *searchText = self.searchField.stringValue;
+    NSMutableArray* predicates = [[NSMutableArray alloc] initWithCapacity:3];
+    Class selectedPackageClass = [self segmentClassMapping][@([self.packageTypeSegmentedControl selectedSegment])];
+    if (selectedPackageClass) {
+        [predicates addObject:[NSPredicate predicateWithFormat:CLASS_PREDICATE_FORMAT, selectedPackageClass]];
+    }
+
+    if (searchText.length > 0) {
+        [predicates addObject:[NSPredicate predicateWithFormat:SEARCH_PREDICATE_FORMAT, searchText, searchText]];
+    }
+
+    if ([self.installationStateSegmentedControl selectedSegment] == 1) {
+        [predicates addObject:[NSPredicate predicateWithFormat:INSTALLED_PREDICATE_FORMAT]];
+    }
+    else if ([self.installationStateSegmentedControl selectedSegment] == 2) {
+        [predicates addObject:[NSPredicate predicateWithFormat:BLACKLISTED_PREDICATE_FORMAT]];
+    }
+
+    [self.tableViewDelegate filterUsingPredicate:[NSCompoundPredicate andPredicateWithSubpredicates:predicates]];
+    [self.tableView reloadData];
 }
 
 @end

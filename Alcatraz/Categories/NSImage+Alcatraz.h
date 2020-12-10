@@ -1,6 +1,6 @@
-// Template.h
+// NSImage+Alcatraz.h
 //
-// Copyright (c) 2013 Marin Usalj | supermar.in
+// Copyright (c) 2016 Roman Gardukevich
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -20,10 +20,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+#import <Cocoa/Cocoa.h>
 
-#import <Foundation/Foundation.h>
-#import "ATZPackage.h"
-
-@interface ATZTemplate : ATZPackage
-
+@interface NSImage (Alcatraz)
+@property (nonatomic, readonly) NSInteger frameCount;
 @end

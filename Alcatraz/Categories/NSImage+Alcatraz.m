@@ -1,6 +1,6 @@
-// Template.h
+// NSImage+Alcatraz.m
 //
-// Copyright (c) 2013 Marin Usalj | supermar.in
+// Copyright (c) 2016 Roman Gardukevich
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -21,9 +21,19 @@
 // THE SOFTWARE.
 
 
-#import <Foundation/Foundation.h>
-#import "ATZPackage.h"
+#import "NSImage+Alcatraz.h"
 
-@interface ATZTemplate : ATZPackage
-
+@implementation NSImage (Alcatraz)
+-(NSInteger)frameCount {
+    // Based on NSImage+GIF.m from https://gist.github.com/keefo/5344890
+    
+    for (NSImageRep *representation in self.representations) {
+        if ([representation isKindOfClass:[NSBitmapImageRep class]]) {
+            NSBitmapImageRep *bitmapRep = (NSBitmapImageRep *)representation;
+            NSInteger numFrame = [[bitmapRep valueForProperty:NSImageFrameCount] integerValue];
+            return numFrame;
+        }
+    }
+    return 1;
+}
 @end
